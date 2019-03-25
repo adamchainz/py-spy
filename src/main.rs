@@ -29,8 +29,13 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
-
 extern crate remoteprocess;
+
+#[macro_use]
+extern crate rouille;
+#[macro_use]
+extern crate rust_embed;
+extern crate mime_guess;
 
 mod config;
 mod dump;
@@ -44,6 +49,7 @@ mod python_interpreters;
 mod python_spy;
 mod python_data_access;
 mod stack_trace;
+
 mod console_viewer;
 mod flamegraph;
 mod speedscope;
@@ -51,6 +57,7 @@ mod sampler;
 mod timer;
 mod utils;
 mod version;
+mod web_viewer;
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -104,6 +111,49 @@ fn sample_console(pid: remoteprocess::Pid,
     if !config.subprocesses {
         println!("\nprocess {} ended", pid);
     }
+    Ok(())
+}
+
+fn sample_serve(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error> {
+    let sampler = sampler::Sampler::new(pid, config)?;
+
+    let display = match remoteprocess::Process::new(pid)?.cmdline() {
+        Ok(cmdline) => cmdline.join(" "),
+        Err(_) => format!("Pid {}", pid)
+    };
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+
+    let start = std::time::Instant::now();
+
+    let version = match sampler.version.as_ref() {
+        Some(version) => format!("{}", version),
+        _ => "".to_owned()
+    };
+
+    let mut server = web_viewer::WebViewer::new(&display, &version, config)?;
+    for sample in sampler {
+        server.increment(sample.traces)?;
+        // TODO: handle late samples eetc
+        if !running.load(Ordering::SeqCst) {
+            break;
+        }
+    } 
+
+    if running.load(Ordering::SeqCst) {
+	println!("\nprocess {} ended", pid);
+	println!("elapsed: {:?}", std::time::Instant::now() - start);
+	println!("Press Control-C to stop serving");
+        server.notify_exitted();
+	while running.load(Ordering::SeqCst) {
+	   std::thread::sleep(Duration::from_millis(10));
+	}
+    }
+
     Ok(())
 }
 
@@ -302,6 +352,9 @@ fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error>
 
 fn run_spy_command(pid: remoteprocess::Pid, config: &config::Config) -> Result<(), Error> {
     match config.command.as_ref() {
+        "serve" => {
+            sample_serve(pid, config)?;
+        },
         "dump" =>  {
             dump::print_traces(pid, config)?;
         },

@@ -123,6 +123,13 @@ impl Config {
                     .help("commandline of a python program to run")
                     .multiple(true);
 
+        let serve = clap::SubCommand::with_name("serve")
+            .about("Start a webserver hosting a continous interactive view of the python program")
+            .arg(program.clone())
+            .arg(pid.clone())
+            .arg(rate.clone())
+            .arg(subprocesses.clone());
+
         let record = clap::SubCommand::with_name("record")
             .about("Records stack trace information to a flamegraph, speedscope or raw file")
             .arg(program.clone())
@@ -194,6 +201,8 @@ impl Config {
 
         // add native unwinding if appropiate
         #[cfg(unwind)]
+        let serve = serve.arg(serve.clone());
+        #[cfg(unwind)]
         let record = record.arg(native.clone());
         #[cfg(unwind)]
         let top = top.arg(native.clone());
@@ -201,6 +210,8 @@ impl Config {
         let dump = dump.arg(native.clone());
 
         // Nonblocking isn't an option for freebsd, remove
+        #[cfg(not(target_os="freebsd"))]
+        let serve = serve.arg(nonblocking.clone());
         #[cfg(not(target_os="freebsd"))]
         let record = record.arg(nonblocking.clone());
         #[cfg(not(target_os="freebsd"))]
@@ -215,6 +226,7 @@ impl Config {
             .setting(clap::AppSettings::SubcommandRequiredElseHelp)
             .global_setting(clap::AppSettings::DeriveDisplayOrder)
             .global_setting(clap::AppSettings::UnifiedHelpMessage)
+            .subcommand(serve)
             .subcommand(record)
             .subcommand(top)
             .subcommand(dump)
